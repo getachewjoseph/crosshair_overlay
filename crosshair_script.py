@@ -4,7 +4,8 @@ import json
 import os
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QSlider, QPushButton, QCheckBox,
-                           QGroupBox, QSpinBox, QLineEdit, QComboBox, QSystemTrayIcon, QMenu)
+                           QGroupBox, QSpinBox, QLineEdit, QComboBox, QSystemTrayIcon, QMenu,
+                           QInputDialog, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QSharedMemory
 from PyQt5.QtCore import QLineF
 from PyQt5.QtGui import QPainter, QPen, QColor, QFont, QIcon
@@ -26,6 +27,54 @@ DEFAULT_CONFIG = {
     'dot_size': 6
 }
 
+# Default crosshair presets
+DEFAULT_PRESETS = {
+    'Default Green': {
+        'color': {'r': 0, 'g': 255, 'b': 0, 'a': 255},
+        'outline_color': {'r': 0, 'g': 0, 'b': 0, 'a': 255},
+        'line_thickness': 2,
+        'crosshair_length': 8,
+        'crosshair_gap': 2,
+        'outline_enabled': True,
+        'outline_thickness': 1,
+        'crosshair_style': 'cross',
+        'dot_size': 6
+    },
+    'Red Dot': {
+        'color': {'r': 255, 'g': 0, 'b': 0, 'a': 255},
+        'outline_color': {'r': 0, 'g': 0, 'b': 0, 'a': 255},
+        'line_thickness': 2,
+        'crosshair_length': 0,
+        'crosshair_gap': 0,
+        'outline_enabled': True,
+        'outline_thickness': 1,
+        'crosshair_style': 'dot',
+        'dot_size': 8
+    },
+    'Blue Cross': {
+        'color': {'r': 0, 'g': 0, 'b': 255, 'a': 255},
+        'outline_color': {'r': 255, 'g': 255, 'b': 255, 'a': 255},
+        'line_thickness': 3,
+        'crosshair_length': 12,
+        'crosshair_gap': 4,
+        'outline_enabled': True,
+        'outline_thickness': 2,
+        'crosshair_style': 'cross',
+        'dot_size': 6
+    },
+    'White Minimal': {
+        'color': {'r': 255, 'g': 255, 'b': 255, 'a': 255},
+        'outline_color': {'r': 0, 'g': 0, 'b': 0, 'a': 255},
+        'line_thickness': 1,
+        'crosshair_length': 6,
+        'crosshair_gap': 1,
+        'outline_enabled': False,
+        'outline_thickness': 1,
+        'crosshair_style': 'cross',
+        'dot_size': 6
+    }
+}
+
 # Default color presets
 DEFAULT_COLORS = {
     'Green': '#00FF00',
@@ -39,6 +88,77 @@ DEFAULT_COLORS = {
     'Pink': '#FF69B4',
     'Purple': '#800080'
 }
+
+class CrosshairPresetManager:
+    """Manages saving, loading, and managing multiple crosshair presets"""
+    
+    def __init__(self, filename='crosshair_presets.json'):
+        self.filename = filename
+        self.presets = self.load_presets()
+    
+    def load_presets(self):
+        """Load presets from file, creating default presets if file doesn't exist"""
+        try:
+            if os.path.exists(self.filename):
+                with open(self.filename, 'r') as f:
+                    loaded_presets = json.load(f)
+                    # Merge with default presets to ensure all defaults are available
+                    merged_presets = DEFAULT_PRESETS.copy()
+                    merged_presets.update(loaded_presets)
+                    return merged_presets
+            else:
+                # Create file with default presets
+                self.save_presets(DEFAULT_PRESETS)
+                return DEFAULT_PRESETS.copy()
+        except Exception as e:
+            print(f"Error loading presets: {e}")
+            return DEFAULT_PRESETS.copy()
+    
+    def save_presets(self, presets=None):
+        """Save presets to file"""
+        if presets is None:
+            presets = self.presets
+        try:
+            with open(self.filename, 'w') as f:
+                json.dump(presets, f, indent=2)
+            self.presets = presets
+            return True
+        except Exception as e:
+            print(f"Error saving presets: {e}")
+            return False
+    
+    def get_preset_names(self):
+        """Get list of preset names"""
+        return list(self.presets.keys())
+    
+    def get_preset(self, name):
+        """Get a specific preset by name"""
+        return self.presets.get(name, DEFAULT_CONFIG.copy())
+    
+    def save_current_as_preset(self, name, config):
+        """Save current configuration as a new preset"""
+        self.presets[name] = config.copy()
+        return self.save_presets()
+    
+    def delete_preset(self, name):
+        """Delete a preset (but not default ones)"""
+        if name in DEFAULT_PRESETS:
+            print(f"Cannot delete default preset: {name}")
+            return False
+        if name in self.presets:
+            del self.presets[name]
+            return self.save_presets()
+        return False
+    
+    def rename_preset(self, old_name, new_name):
+        """Rename a preset"""
+        if old_name in DEFAULT_PRESETS:
+            print(f"Cannot rename default preset: {old_name}")
+            return False
+        if old_name in self.presets and new_name not in self.presets:
+            self.presets[new_name] = self.presets.pop(old_name)
+            return self.save_presets()
+        return False
 
 class ImprovedHotKeyListener(QThread):
     """Improved hotkey listener with better error handling"""
@@ -291,6 +411,8 @@ class CrosshairMenu(QWidget):
     def __init__(self, config):
         super().__init__()
         self.config = config.copy()
+        self.preset_manager = CrosshairPresetManager()
+        self.current_preset_name = "Default Green"
         self.setup_ui()
         self.load_settings()
         
@@ -314,6 +436,34 @@ class CrosshairMenu(QWidget):
         title.setAlignment(Qt.AlignCenter)
         title.setFont(QFont("Arial", 16, QFont.Bold))
         layout.addWidget(title)
+        
+        # Preset management
+        preset_group = QGroupBox("Crosshair Presets")
+        preset_layout = QVBoxLayout()
+        
+        # Preset selector
+        preset_selector_layout = QHBoxLayout()
+        preset_selector_layout.addWidget(QLabel("Preset:"))
+        self.preset_combo = QComboBox()
+        self.update_preset_combo()
+        self.preset_combo.currentTextChanged.connect(self.preset_changed)
+        preset_selector_layout.addWidget(self.preset_combo)
+        preset_layout.addLayout(preset_selector_layout)
+        
+        # Preset management buttons
+        preset_buttons_layout = QHBoxLayout()
+        
+        self.save_preset_button = QPushButton("Save Current as Preset")
+        self.save_preset_button.clicked.connect(self.save_current_as_preset)
+        preset_buttons_layout.addWidget(self.save_preset_button)
+        
+        self.delete_preset_button = QPushButton("Delete Preset")
+        self.delete_preset_button.clicked.connect(self.delete_current_preset)
+        preset_buttons_layout.addWidget(self.delete_preset_button)
+        
+        preset_layout.addLayout(preset_buttons_layout)
+        preset_group.setLayout(preset_layout)
+        layout.addWidget(preset_group)
         
         # Style selector
         style_layout = QHBoxLayout()
@@ -442,6 +592,11 @@ class CrosshairMenu(QWidget):
         self.dot_size_slider.setValue(self.config.get('dot_size', 6))
         self.dot_size_label.setText(str(self.config.get('dot_size', 6)))
         self.update_dot_size_visibility()
+        
+        # Update preset combo to reflect current settings
+        if hasattr(self, 'preset_combo'):
+            self.update_preset_combo()
+        
         if hasattr(self, 'preview_widget'):
             self.preview_widget.update_config(self.config)
     
@@ -497,9 +652,34 @@ class CrosshairMenu(QWidget):
         self.settings_changed.emit(self.config)
         if hasattr(self, 'preview_widget'):
             self.preview_widget.update_config(self.config)
+        
+        # Update preset combo to show "Custom" if current settings don't match any preset
+        self.update_preset_combo_for_current_settings()
+    
+    def update_preset_combo_for_current_settings(self):
+        """Update preset combo to show which preset matches current settings, or 'Custom'"""
+        preset_names = self.preset_manager.get_preset_names()
+        current_preset = None
+        
+        for name in preset_names:
+            preset_config = self.preset_manager.get_preset(name)
+            if preset_config == self.config:
+                current_preset = name
+                break
+        
+        if current_preset and current_preset != self.current_preset_name:
+            self.current_preset_name = current_preset
+            self.preset_combo.setCurrentText(current_preset)
+        elif not current_preset and self.current_preset_name in preset_names:
+            # Settings don't match any preset, show "Custom"
+            self.current_preset_name = "Custom"
+            if "Custom" not in [self.preset_combo.itemText(i) for i in range(self.preset_combo.count())]:
+                self.preset_combo.addItem("Custom")
+            self.preset_combo.setCurrentText("Custom")
     
     def reset_to_default(self):
-        self.config = DEFAULT_CONFIG.copy()
+        self.config = self.preset_manager.get_preset("Default Green").copy()
+        self.current_preset_name = "Default Green"
         self.load_settings()
         self.emit_settings()
     
@@ -510,6 +690,73 @@ class CrosshairMenu(QWidget):
             print("Settings saved successfully")
         except Exception as e:
             print(f"Error saving settings: {e}")
+    
+    def update_preset_combo(self):
+        """Update the preset combo box with current presets"""
+        self.preset_combo.clear()
+        preset_names = self.preset_manager.get_preset_names()
+        for name in preset_names:
+            self.preset_combo.addItem(name)
+        
+        # Set current preset
+        if self.current_preset_name in preset_names:
+            self.preset_combo.setCurrentText(self.current_preset_name)
+        elif preset_names:
+            self.preset_combo.setCurrentText(preset_names[0])
+    
+    def preset_changed(self, preset_name):
+        """Handle preset selection change"""
+        if preset_name and preset_name != self.current_preset_name:
+            self.current_preset_name = preset_name
+            new_config = self.preset_manager.get_preset(preset_name)
+            self.config = new_config.copy()
+            self.load_settings()
+            self.emit_settings()
+    
+    def save_current_as_preset(self):
+        """Save current configuration as a new preset"""
+        name, ok = QInputDialog.getText(self, "Save Preset", 
+                                       "Enter preset name:", 
+                                       text=f"Custom Preset {len(self.preset_manager.get_preset_names()) + 1}")
+        if ok and name:
+            if name in self.preset_manager.get_preset_names():
+                QMessageBox.warning(self, "Error", "A preset with this name already exists!")
+                return
+            
+            if self.preset_manager.save_current_as_preset(name, self.config):
+                self.update_preset_combo()
+                self.current_preset_name = name
+                self.preset_combo.setCurrentText(name)
+                print(f"Preset '{name}' saved successfully")
+            else:
+                print("Failed to save preset")
+    
+    def delete_current_preset(self):
+        """Delete the currently selected preset"""
+        if not self.current_preset_name:
+            return
+            
+        # Don't allow deletion of default presets
+        if self.current_preset_name in DEFAULT_PRESETS:
+            QMessageBox.warning(self, "Cannot Delete", 
+                              f"Cannot delete default preset '{self.current_preset_name}'")
+            return
+        
+        reply = QMessageBox.question(self, "Delete Preset", 
+                                   f"Are you sure you want to delete '{self.current_preset_name}'?",
+                                   QMessageBox.Yes | QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            if self.preset_manager.delete_preset(self.current_preset_name):
+                self.update_preset_combo()
+                # Switch to first available preset
+                preset_names = self.preset_manager.get_preset_names()
+                if preset_names:
+                    self.current_preset_name = preset_names[0]
+                    self.preset_changed(self.current_preset_name)
+                print(f"Preset '{self.current_preset_name}' deleted successfully")
+            else:
+                print("Failed to delete preset")
     
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -534,12 +781,16 @@ class CrosshairOverlay(QWidget):
     
     def load_config(self):
         try:
+            # First try to load from the old settings file
             if os.path.exists('crosshair_settings.json'):
                 with open('crosshair_settings.json', 'r') as f:
                     return json.load(f)
         except Exception as e:
             print(f"Error loading settings: {e}")
-        return DEFAULT_CONFIG.copy()
+        
+        # If no settings file exists, use the default preset
+        preset_manager = CrosshairPresetManager()
+        return preset_manager.get_preset("Default Green")
     
     def setup_window(self):
         self.setWindowFlags(
