@@ -1,0 +1,19 @@
+{
+  "color": {
+    "r": 255,
+    "g": 0,
+    "b": 0,
+    "a": 255
+  },
+  "outline_color": {
+    "r": 0,
+    "g": 0,
+    "b": 0,
+    "a": 255
+  },
+  "line_thickness": 2,
+  "crosshair_length": 2,
+  "crosshair_gap": 3,
+  "outline_enabled": false,
+  "outline_thickness": 1
+}
